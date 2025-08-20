@@ -9,9 +9,12 @@ from sklearn.neighbors import KNeighborsClassifier
 from sklearn.tree import DecisionTreeClassifier, export_graphviz
 from sklearn.naive_bayes import GaussianNB
 from sklearn.metrics import classification_report, confusion_matrix, accuracy_score
-from sklearn.preprocessing import LabelEncoder, OrdinalEncoder
+from sklearn.preprocessing import LabelEncoder, OrdinalEncoder, StandardScaler, RobustScaler
+from sklearn.impute import SimpleImputer, KNNImputer
 from io import StringIO
 import graphviz
+import warnings
+warnings.filterwarnings('ignore')
 
 st.set_page_config(page_title="ML Models App", layout="wide")
 
@@ -42,13 +45,13 @@ if option == "Cargar un archivo CSV propio":
     if uploaded_file is not None:
         try:
             df = pd.read_csv(uploaded_file)
-            st.write("### Vista previa de tus datos originales")
+            st.write("### 📋 Vista previa de tus datos originales")
             st.dataframe(df.head())
             
             # Mostrar información del dataset
-            col1, col2 = st.columns(2)
+            col1, col2, col3 = st.columns(3)
             with col1:
-                st.write("**Información del dataset:**")
+                st.write("**Información básica:**")
                 st.write(f"- Filas: {len(df)}")
                 st.write(f"- Columnas: {len(df.columns)}")
                 
@@ -58,12 +61,74 @@ if option == "Cargar un archivo CSV propio":
                     dtype = "Cualitativo" if df[col].dtype == 'object' else "Cuantitativo"
                     st.write(f"- {col}: {dtype}")
             
-            # Verificar valores nulos
-            if df.isnull().sum().sum() > 0:
-                st.warning("⚠️ Tu dataset contiene valores nulos. Por favor, límpialos antes de continuar.")
-                st.write("Valores nulos por columna:")
-                st.write(df.isnull().sum())
-                st.stop()
+            with col3:
+                st.write("**Calidad de datos:**")
+                total_cells = len(df) * len(df.columns)
+                missing_cells = df.isnull().sum().sum()
+                st.write(f"- Valores faltantes: {missing_cells}")
+                st.write(f"- Completitud: {((total_cells - missing_cells) / total_cells * 100):.1f}%")
+            
+            # Análisis detallado de calidad de datos
+            st.write("### 🔍 Análisis de Calidad de Datos")
+            
+            # Valores faltantes por columna
+            missing_data = df.isnull().sum()
+            if missing_data.sum() > 0:
+                st.write("#### ❌ Valores faltantes por columna:")
+                missing_df = pd.DataFrame({
+                    'Columna': missing_data.index,
+                    'Valores_Faltantes': missing_data.values,
+                    'Porcentaje': (missing_data.values / len(df) * 100).round(2)
+                })
+                st.dataframe(missing_df[missing_df['Valores_Faltantes'] > 0])
+            else:
+                st.success("✅ No hay valores faltantes en el dataset")
+            
+            # Detectar valores duplicados
+            duplicated_rows = df.duplicated().sum()
+            if duplicated_rows > 0:
+                st.warning(f"⚠️ Se encontraron {duplicated_rows} filas duplicadas")
+            else:
+                st.success("✅ No hay filas duplicadas")
+            
+            # Análisis de datos atípicos para columnas numéricas
+            numerical_columns = df.select_dtypes(include=[np.number]).columns
+            if len(numerical_columns) > 0:
+                st.write("#### 📊 Análisis de datos atípicos (valores numéricos)")
+                
+                outlier_info = []
+                for col in numerical_columns:
+                    Q1 = df[col].quantile(0.25)
+                    Q3 = df[col].quantile(0.75)
+                    IQR = Q3 - Q1
+                    lower_bound = Q1 - 1.5 * IQR
+                    upper_bound = Q3 + 1.5 * IQR
+                    
+                    outliers = df[(df[col] < lower_bound) | (df[col] > upper_bound)][col]
+                    outlier_info.append({
+                        'Columna': col,
+                        'Outliers': len(outliers),
+                        'Porcentaje': (len(outliers) / len(df) * 100).round(2),
+                        'Min_Normal': lower_bound.round(2),
+                        'Max_Normal': upper_bound.round(2)
+                    })
+                
+                outlier_df = pd.DataFrame(outlier_info)
+                st.dataframe(outlier_df)
+            
+            # Detectar posibles valores erróneos en columnas categóricas
+            categorical_columns = df.select_dtypes(include=['object']).columns
+            if len(categorical_columns) > 0:
+                st.write("#### 🔤 Análisis de datos categóricos")
+                
+                for col in categorical_columns:
+                    unique_vals = df[col].dropna().unique()
+                    st.write(f"**{col}:** {len(unique_vals)} valores únicos")
+                    if len(unique_vals) <= 10:  # Mostrar solo si hay pocos valores únicos
+                        value_counts = df[col].value_counts()
+                        st.write(f"- Distribución: {dict(value_counts.head())}")
+                    else:
+                        st.write(f"- Primeros 5 valores: {list(unique_vals[:5])}")
                 
         except Exception as e:
             st.error(f"Error al cargar el archivo: {str(e)}")
@@ -148,69 +213,271 @@ else:
     st.dataframe(df.head())
 
 # Preprocesamiento de datos
-st.write("### 🔄 Preprocesamiento de datos")
+st.write("### 🔧 Preprocesamiento de Datos")
 
-# Separar características y objetivo
-X = df.iloc[:, :-1].copy()
-y = df.iloc[:, -1].copy()
+# Separar características y objetivo antes del preprocesamiento
+X_original = df.iloc[:, :-1].copy()
+y_original = df.iloc[:, -1].copy()
 
-# Mostrar las columnas antes del preprocesamiento
-st.write("**Características (X):**", list(X.columns))
-st.write("**Variable objetivo (y):**", y.name if hasattr(y, 'name') else "target")
+st.write("**Configuración de preprocesamiento:**")
 
-# Identificar columnas categóricas y numéricas
-categorical_cols = X.select_dtypes(include=['object']).columns.tolist()
-numerical_cols = X.select_dtypes(exclude=['object']).columns.tolist()
+# Crear pestañas para diferentes aspectos del preprocesamiento
+tab1, tab2, tab3, tab4 = st.tabs(["🧹 Limpieza", "📊 Imputación", "🎯 Outliers", "🔄 Codificación"])
 
-st.write(f"**Columnas categóricas:** {categorical_cols}")
-st.write(f"**Columnas numéricas:** {numerical_cols}")
-
-# Aplicar codificación a variables categóricas
-X_processed = X.copy()
-
-if categorical_cols:
-    st.write("#### Codificación de variables categóricas")
-    encoding_method = st.selectbox(
-        "Selecciona el método de codificación:",
-        ["Label Encoding", "Ordinal Encoding (personalizado)"]
+with tab1:
+    st.write("#### Limpieza de datos")
+    
+    # Eliminar duplicados
+    remove_duplicates = st.checkbox("Eliminar filas duplicadas", value=True)
+    
+    # Eliminar columnas con muchos valores faltantes
+    threshold_missing = st.slider(
+        "Eliminar columnas con más de X% de valores faltantes", 
+        0, 100, 80, step=5
     )
     
-    if encoding_method == "Label Encoding":
-        for col in categorical_cols:
-            le = LabelEncoder()
-            X_processed[col] = le.fit_transform(X[col])
-            encoders[col] = le
-            st.write(f"- {col}: {dict(zip(le.classes_, le.transform(le.classes_)))}")
+    # Aplicar limpieza
+    df_clean = df.copy()
     
-    else:  # Ordinal Encoding personalizado
-        st.write("Define el orden para cada variable categórica:")
-        for col in categorical_cols:
-            unique_vals = sorted(X[col].unique())
-            st.write(f"**{col}:** {unique_vals}")
-            # Para simplicidad, usar orden alfabético por defecto
-            oe = OrdinalEncoder(categories=[unique_vals])
-            X_processed[[col]] = oe.fit_transform(X[[col]])
-            encoders[col] = oe
+    if remove_duplicates:
+        initial_rows = len(df_clean)
+        df_clean = df_clean.drop_duplicates()
+        removed_duplicates = initial_rows - len(df_clean)
+        if removed_duplicates > 0:
+            st.info(f"✅ Eliminadas {removed_duplicates} filas duplicadas")
+    
+    # Eliminar columnas con muchos valores faltantes
+    cols_to_drop = []
+    for col in df_clean.columns:
+        missing_pct = (df_clean[col].isnull().sum() / len(df_clean)) * 100
+        if missing_pct > threshold_missing:
+            cols_to_drop.append(col)
+    
+    if cols_to_drop:
+        st.warning(f"⚠️ Se eliminarán las columnas: {cols_to_drop} (>{threshold_missing}% valores faltantes)")
+        df_clean = df_clean.drop(columns=cols_to_drop)
+    else:
+        st.success("✅ Todas las columnas cumplen el criterio de completitud")
 
-# Codificar variable objetivo si es categórica
-if y.dtype == 'object':
-    le_target = LabelEncoder()
-    y_processed = le_target.fit_transform(y)
-    encoders['target'] = le_target
-    st.write(f"**Variable objetivo codificada:** {dict(zip(le_target.classes_, le_target.transform(le_target.classes_)))}")
-else:
-    y_processed = y.copy()
+with tab2:
+    st.write("#### Imputación de valores faltantes")
+    
+    # Separar datos después de limpieza inicial
+    X_clean = df_clean.iloc[:, :-1].copy()
+    y_clean = df_clean.iloc[:, -1].copy()
+    
+    categorical_cols = X_clean.select_dtypes(include=['object']).columns.tolist()
+    numerical_cols = X_clean.select_dtypes(exclude=['object']).columns.tolist()
+    
+    st.write(f"**Columnas categóricas:** {categorical_cols}")
+    st.write(f"**Columnas numéricas:** {numerical_cols}")
+    
+    # Configuración de imputación para categóricas
+    if categorical_cols:
+        cat_imputation = st.selectbox(
+            "Método de imputación para variables categóricas:",
+            ["most_frequent", "constant"]
+        )
+        if cat_imputation == "constant":
+            cat_fill_value = st.text_input("Valor constante para categóricas:", "Desconocido")
+    
+    # Configuración de imputación para numéricas
+    if numerical_cols:
+        num_imputation = st.selectbox(
+            "Método de imputación para variables numéricas:",
+            ["mean", "median", "most_frequent", "knn"]
+        )
+        if num_imputation == "knn":
+            knn_neighbors = st.slider("Número de vecinos para KNN:", 1, 10, 5)
+    
+    # Aplicar imputación
+    X_imputed = X_clean.copy()
+    
+    # Imputar categóricas
+    if categorical_cols and X_clean[categorical_cols].isnull().sum().sum() > 0:
+        if cat_imputation == "constant":
+            imputer_cat = SimpleImputer(strategy='constant', fill_value=cat_fill_value)
+        else:
+            imputer_cat = SimpleImputer(strategy=cat_imputation)
+        
+        X_imputed[categorical_cols] = imputer_cat.fit_transform(X_clean[categorical_cols])
+        st.success(f"✅ Imputación categórica aplicada con método: {cat_imputation}")
+    
+    # Imputar numéricas
+    if numerical_cols and X_clean[numerical_cols].isnull().sum().sum() > 0:
+        if num_imputation == "knn":
+            imputer_num = KNNImputer(n_neighbors=knn_neighbors)
+        else:
+            imputer_num = SimpleImputer(strategy=num_imputation)
+        
+        X_imputed[numerical_cols] = imputer_num.fit_transform(X_clean[numerical_cols])
+        st.success(f"✅ Imputación numérica aplicada con método: {num_imputation}")
+    
+    # Imputar variable objetivo si es necesaria
+    y_imputed = y_clean.copy()
+    if y_clean.isnull().sum() > 0:
+        if y_clean.dtype == 'object':
+            y_imputer = SimpleImputer(strategy='most_frequent')
+        else:
+            y_imputer = SimpleImputer(strategy='median')
+        y_imputed = pd.Series(y_imputer.fit_transform(y_clean.values.reshape(-1, 1)).flatten())
+        st.info("✅ Variable objetivo imputada")
+
+with tab3:
+    st.write("#### Tratamiento de valores atípicos")
+    
+    if numerical_cols:
+        outlier_method = st.selectbox(
+            "Método para tratar outliers:",
+            ["none", "iqr_remove", "iqr_cap", "zscore", "isolation_forest"]
+        )
+        
+        X_outliers = X_imputed.copy()
+        
+        if outlier_method == "iqr_remove":
+            # Eliminar outliers usando IQR
+            outlier_threshold = st.slider("Multiplicador IQR:", 1.0, 3.0, 1.5, step=0.1)
+            initial_rows = len(X_outliers)
+            
+            for col in numerical_cols:
+                Q1 = X_outliers[col].quantile(0.25)
+                Q3 = X_outliers[col].quantile(0.75)
+                IQR = Q3 - Q1
+                lower_bound = Q1 - outlier_threshold * IQR
+                upper_bound = Q3 + outlier_threshold * IQR
+                
+                mask = (X_outliers[col] >= lower_bound) & (X_outliers[col] <= upper_bound)
+                X_outliers = X_outliers[mask]
+                y_imputed = y_imputed[mask]
+            
+            removed_outliers = initial_rows - len(X_outliers)
+            st.info(f"✅ Eliminadas {removed_outliers} filas con outliers")
+            
+        elif outlier_method == "iqr_cap":
+            # Limitar outliers usando IQR
+            outlier_threshold = st.slider("Multiplicador IQR:", 1.0, 3.0, 1.5, step=0.1)
+            
+            for col in numerical_cols:
+                Q1 = X_outliers[col].quantile(0.25)
+                Q3 = X_outliers[col].quantile(0.75)
+                IQR = Q3 - Q1
+                lower_bound = Q1 - outlier_threshold * IQR
+                upper_bound = Q3 + outlier_threshold * IQR
+                
+                X_outliers[col] = X_outliers[col].clip(lower_bound, upper_bound)
+            
+            st.success("✅ Outliers limitados usando método IQR")
+            
+        elif outlier_method == "zscore":
+            # Eliminar outliers usando Z-score
+            zscore_threshold = st.slider("Umbral Z-score:", 1.0, 4.0, 3.0, step=0.1)
+            initial_rows = len(X_outliers)
+            
+            for col in numerical_cols:
+                z_scores = np.abs((X_outliers[col] - X_outliers[col].mean()) / X_outliers[col].std())
+                mask = z_scores <= zscore_threshold
+                X_outliers = X_outliers[mask]
+                y_imputed = y_imputed[mask]
+            
+            removed_outliers = initial_rows - len(X_outliers)
+            st.info(f"✅ Eliminadas {removed_outliers} filas con outliers (Z-score)")
+    
+    else:
+        X_outliers = X_imputed.copy()
+        st.info("ℹ️ No hay columnas numéricas para tratar outliers")
+
+with tab4:
+    st.write("#### Codificación de variables categóricas")
+    
+    # Usar datos después del tratamiento de outliers
+    X_processed = X_outliers.copy()
+    y_processed = y_imputed.copy()
+    
+    # Actualizar lista de columnas categóricas después de posibles eliminaciones
+    categorical_cols_final = X_processed.select_dtypes(include=['object']).columns.tolist()
+    numerical_cols_final = X_processed.select_dtypes(exclude=['object']).columns.tolist()
+    
+    if categorical_cols_final:
+        encoding_method = st.selectbox(
+            "Método de codificación para variables categóricas:",
+            ["label_encoding", "ordinal_encoding", "one_hot_encoding"]
+        )
+        
+        if encoding_method == "label_encoding":
+            for col in categorical_cols_final:
+                le = LabelEncoder()
+                X_processed[col] = le.fit_transform(X_processed[col])
+                encoders[col] = le
+                st.write(f"- **{col}:** {dict(zip(le.classes_, le.transform(le.classes_)))}")
+                
+        elif encoding_method == "ordinal_encoding":
+            st.write("Usando orden alfabético automático para variables ordinales")
+            for col in categorical_cols_final:
+                unique_vals = sorted(X_processed[col].unique())
+                oe = OrdinalEncoder(categories=[unique_vals])
+                X_processed[[col]] = oe.fit_transform(X_processed[[col]])
+                encoders[col] = oe
+                st.write(f"- **{col}:** {dict(zip(unique_vals, range(len(unique_vals))))}")
+                
+        elif encoding_method == "one_hot_encoding":
+            X_processed = pd.get_dummies(X_processed, columns=categorical_cols_final, prefix=categorical_cols_final)
+            st.write(f"✅ One-hot encoding aplicado. Nuevas columnas: {len(X_processed.columns) - len(numerical_cols_final)}")
+    
+    # Codificar variable objetivo si es categórica
+    if y_processed.dtype == 'object':
+        le_target = LabelEncoder()
+        y_processed = le_target.fit_transform(y_processed)
+        encoders['target'] = le_target
+        st.write(f"**Variable objetivo codificada:** {dict(zip(le_target.classes_, le_target.transform(le_target.classes_)))}")
+    
+    # Normalización/estandarización opcional para variables numéricas
+    if numerical_cols_final:
+        scaling_method = st.selectbox(
+            "Escalamiento de variables numéricas:",
+            ["none", "standard", "robust"]
+        )
+        
+        if scaling_method == "standard":
+            scaler = StandardScaler()
+            X_processed[numerical_cols_final] = scaler.fit_transform(X_processed[numerical_cols_final])
+            encoders['scaler'] = scaler
+            st.success("✅ Estandarización aplicada (media=0, std=1)")
+            
+        elif scaling_method == "robust":
+            scaler = RobustScaler()
+            X_processed[numerical_cols_final] = scaler.fit_transform(X_processed[numerical_cols_final])
+            encoders['scaler'] = scaler
+            st.success("✅ Escalamiento robusto aplicado (mediana, IQR)")
+
+# Mostrar resumen del preprocesamiento
+st.write("### 📈 Resumen del Preprocesamiento")
+
+col1, col2, col3 = st.columns(3)
+with col1:
+    st.metric("Filas originales", len(df))
+    st.metric("Filas finales", len(X_processed))
+
+with col2:
+    st.metric("Columnas originales", len(df.columns))
+    st.metric("Columnas finales", len(X_processed.columns))
+
+with col3:
+    original_missing = df.isnull().sum().sum()
+    final_missing = X_processed.isnull().sum().sum()
+    st.metric("Valores faltantes originales", original_missing)
+    st.metric("Valores faltantes finales", final_missing)
 
 # Mostrar datos procesados
-st.write("### Vista previa de datos procesados")
-df_processed = X_processed.copy()
-df_processed['target'] = y_processed
-st.dataframe(df_processed.head())
+st.write("### Vista previa de datos preprocesados")
+df_final = X_processed.copy()
+df_final['target'] = y_processed
+st.dataframe(df_final.head())
 
 # Train-Test Split
 test_size = st.sidebar.slider("Tamaño del conjunto de prueba (%)", 10, 50, 30, step=5)
 X_train, X_test, y_train, y_test = train_test_split(
-    X_processed, y_processed, test_size=test_size/100, random_state=42, stratify=y_processed
+    X_processed, y_processed, test_size=test_size/100, random_state=42, 
+    stratify=y_processed if len(np.unique(y_processed)) > 1 else None
 )
 
 # Selección de modelo
@@ -428,10 +695,18 @@ st.sidebar.markdown("---")
 st.sidebar.markdown("### ℹ️ Información")
 st.sidebar.markdown("""
 Esta aplicación está optimizada para trabajar con datos cualitativos usando:
+- **Preprocesamiento completo**: Limpieza, imputación, outliers
 - **Árboles de Decisión**: Ideales para datos categóricos
 - **Codificación automática** de variables categóricas
 - **Visualización interactiva** del árbol
 - **Predicciones en tiempo real**
+
+**Métodos de preprocesamiento incluidos:**
+- Eliminación de duplicados y columnas vacías
+- Imputación (SimpleImputer, KNNImputer)
+- Tratamiento de outliers (IQR, Z-score)
+- Codificación (Label, Ordinal, One-Hot)
+- Escalamiento (StandardScaler, RobustScaler)
 """)
 
 if st.sidebar.button("🔄 Reiniciar aplicación"):
