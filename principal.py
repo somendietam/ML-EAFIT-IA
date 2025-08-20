@@ -72,43 +72,79 @@ if option == "Cargar un archivo CSV propio":
         st.warning("Por favor carga un archivo CSV válido.")
         st.stop()
 else:
-    # Crear dataset simulado con datos cualitativos
+    # Crear dataset simulado con datos cualitativos - Evaluación de Empleados
     np.random.seed(42)
     n_samples = 300
     
     # Crear características cualitativas simuladas
-    pH_levels = np.random.choice(['Ácido', 'Neutro', 'Básico'], n_samples)
-    humedad_levels = np.random.choice(['Baja', 'Media', 'Alta'], n_samples)
-    temperatura = np.random.choice(['Fría', 'Templada', 'Cálida'], n_samples)
-    precipitacion = np.random.choice(['Escasa', 'Moderada', 'Abundante'], n_samples)
+    departamento = np.random.choice(['Ventas', 'Marketing', 'IT', 'RRHH', 'Finanzas'], n_samples)
+    nivel_educacion = np.random.choice(['Secundaria', 'Universitario', 'Posgrado', 'Doctorado'], n_samples)
+    experiencia = np.random.choice(['Junior', 'Semi-Senior', 'Senior'], n_samples)
+    modalidad_trabajo = np.random.choice(['Presencial', 'Remoto', 'Híbrido'], n_samples)
+    capacitacion = np.random.choice(['Baja', 'Media', 'Alta'], n_samples)
     
     # Crear algunas características cuantitativas también
-    radiacion = np.random.normal(500, 100, n_samples)
-    nutrientes = np.random.normal(50, 15, n_samples)
+    horas_trabajadas = np.random.normal(42, 8, n_samples)  # promedio 42 horas por semana
+    proyectos_completados = np.random.poisson(12, n_samples)  # promedio 12 proyectos por año
     
-    # Crear variable objetivo basada en las características
-    cultivo = []
+    # Crear variable objetivo basada en las características con lógica empresarial
+    evaluacion = []
     for i in range(n_samples):
-        if pH_levels[i] == 'Ácido' and humedad_levels[i] == 'Alta':
-            cultivo.append('Arroz')
-        elif pH_levels[i] == 'Básico' and temperatura[i] == 'Cálida':
-            cultivo.append('Maíz')
-        elif humedad_levels[i] == 'Baja' and temperatura[i] == 'Fría':
-            cultivo.append('Trigo')
+        score = 0
+        
+        # Puntuación basada en departamento
+        if departamento[i] == 'IT':
+            score += 2
+        elif departamento[i] in ['Ventas', 'Marketing']:
+            score += 1
+            
+        # Puntuación basada en educación
+        if nivel_educacion[i] == 'Doctorado':
+            score += 3
+        elif nivel_educacion[i] == 'Posgrado':
+            score += 2
+        elif nivel_educacion[i] == 'Universitario':
+            score += 1
+            
+        # Puntuación basada en experiencia
+        if experiencia[i] == 'Senior':
+            score += 2
+        elif experiencia[i] == 'Semi-Senior':
+            score += 1
+            
+        # Puntuación basada en capacitación
+        if capacitacion[i] == 'Alta':
+            score += 2
+        elif capacitacion[i] == 'Media':
+            score += 1
+            
+        # Agregar algo de aleatoriedad
+        score += np.random.randint(-2, 3)
+        
+        # Determinar evaluación final
+        if score >= 6:
+            evaluacion.append('Excelente')
+        elif score >= 3:
+            evaluacion.append('Bueno')
         else:
-            cultivo.append(np.random.choice(['Arroz', 'Maíz', 'Trigo']))
+            evaluacion.append('Regular')
+    
+    # Asegurar que las horas trabajadas y proyectos sean positivos
+    horas_trabajadas = np.clip(horas_trabajadas, 20, 60)
+    proyectos_completados = np.clip(proyectos_completados, 1, 25)
     
     df = pd.DataFrame({
-        'pH_suelo': pH_levels,
-        'Humedad': humedad_levels,
-        'Temperatura': temperatura,
-        'Precipitacion': precipitacion,
-        'RadiacionSolar': radiacion,
-        'Nutrientes': nutrientes,
-        'Cultivo': cultivo
+        'Departamento': departamento,
+        'Nivel_Educacion': nivel_educacion,
+        'Experiencia': experiencia,
+        'Modalidad_Trabajo': modalidad_trabajo,
+        'Capacitacion': capacitacion,
+        'Horas_Semanales': horas_trabajadas.round(1),
+        'Proyectos_Anuales': proyectos_completados,
+        'Evaluacion': evaluacion
     })
     
-    st.write("### Dataset simulado generado (Agricultura)")
+    st.write("### Dataset simulado generado (Evaluación de Empleados)")
     st.dataframe(df.head())
 
 # Preprocesamiento de datos
