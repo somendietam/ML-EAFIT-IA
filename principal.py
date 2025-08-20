@@ -7,7 +7,7 @@ from sklearn.datasets import make_classification
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import accuracy_score, classification_report, confusion_matrix
 from sklearn.neighbors import KNeighborsClassifier
-from sklearn.tree import DecisionTreeClassifier, plot_tree
+from sklearn.tree import DecisionTreeClassifier
 from sklearn.naive_bayes import GaussianNB
 from sklearn.decomposition import PCA
 
@@ -125,20 +125,5 @@ for name, res in results.items():
     ax.set_ylabel("PCA 2")
     ax.set_title(f"Fronteras de decisión - {name}")
     st.pyplot(fig)
-
-    # ======================
-    # Extra: Visualización del Árbol de Decisión
-    # ======================
-    if name == "Árbol de Decisión":
-        st.write("🌳 Visualización del Árbol de Decisión")
-        fig, ax = plt.subplots(figsize=(15, 8))
-        plot_tree(res["model"], 
-                  feature_names=[f"feature_{i}" for i in range(1, 7)],
-                  class_names=["Clase 0", "Clase 1"],
-                  filled=True,
-                  rounded=True,
-                  fontsize=8,
-                  ax=ax)
-        st.pyplot(fig)
 
     st.markdown("---")
